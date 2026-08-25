@@ -164,12 +164,20 @@ class DocumentProcessor:
         return chunks
 
     def _clean_text(self, text: str) -> str:
-        """Collapse whitespace runs. NOTE: currently also collapses paragraph
-        breaks -- fixed in the RAG-quality pass (see backend/app/tests for the
-        regression test that will pin the corrected behavior)."""
-        text = re.sub(r"\s+", " ", text)
+        """Normalize whitespace while preserving paragraph breaks.
 
+        Paragraph boundaries (blank lines) matter for chunking: _create_chunks
+        looks for "\\n\\n" as a preferred sentence/section boundary. Collapsing
+        all whitespace to single spaces (the naive approach) destroys that
+        signal and makes every chunk boundary fall back to sentence-punctuation
+        heuristics even when the source document had clear section structure.
+        """
         text = re.sub(r"[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f]", "", text)
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+        paragraphs = re.split(r"\n\s*\n", text)
+        cleaned_paragraphs = [re.sub(r"\s+", " ", p).strip() for p in paragraphs]
+        text = "\n\n".join(p for p in cleaned_paragraphs if p)
 
         text = text.replace("“", '"').replace("”", '"')
         text = text.replace("‘", "'").replace("’", "'")

@@ -10,7 +10,9 @@ from app.core.exceptions import register_exception_handlers
 from app.core.logging import setup_logging
 from app.models.common import HealthResponse
 from app.services.document_processor import DocumentProcessor
+from app.services.query_rewriter import QueryRewriter
 from app.services.rag_engine import RAGEngine
+from app.services.reranker import Reranker
 from app.services.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -36,6 +38,9 @@ async def lifespan(app: FastAPI):
         vector_store=app.state.vector_store,
         api_key=settings.anthropic_api_key,
         model=settings.anthropic_model,
+        reranker=Reranker(model_name=settings.reranker_model),
+        query_rewriter=QueryRewriter(api_key=settings.anthropic_api_key, model=settings.anthropic_rewrite_model),
+        rerank_candidate_multiplier=settings.rerank_candidate_multiplier,
     )
 
     logger.info(

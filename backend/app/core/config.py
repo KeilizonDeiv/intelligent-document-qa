@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     chunk_overlap: int = 200
 
     embedding_model: str = "all-MiniLM-L6-v2"
+    reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    rerank_candidate_multiplier: int = 3
 
     cors_origins: list[str] = [
         "http://localhost:5173",

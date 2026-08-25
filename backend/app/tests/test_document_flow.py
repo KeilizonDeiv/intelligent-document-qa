@@ -57,3 +57,25 @@ def test_upload_rejects_unsupported_extension(client):
 def test_delete_unknown_source_returns_404(client):
     resp = client.delete("/api/documents/does-not-exist.txt")
     assert resp.status_code == 404
+
+
+def test_documents_are_isolated_between_sessions(client):
+    upload_resp = _upload_sample(client, name="session-a.txt")
+    assert upload_resp.status_code == 200
+    session_a_cookies = dict(client.cookies)
+
+    # Simulate a second browser session on the same server by dropping the
+    # session cookie - the next request gets a brand new session_id.
+    client.cookies.clear()
+
+    stats_as_session_b = client.get("/api/stats")
+    assert stats_as_session_b.json()["total_chunks"] == 0
+
+    query_as_session_b = client.post("/api/query", json={"question": "anything?"})
+    assert query_as_session_b.status_code == 400  # no documents in this session
+
+    # Switching back to session A's cookie should see its document again.
+    client.cookies.update(session_a_cookies)
+    stats_as_session_a = client.get("/api/stats")
+    assert stats_as_session_a.json()["total_chunks"] >= 1
+    assert "session-a.txt" in stats_as_session_a.json()["sources"]

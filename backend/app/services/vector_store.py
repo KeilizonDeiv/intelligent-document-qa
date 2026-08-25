@@ -71,25 +71,6 @@ class VectorStore:
 
         return formatted_results
 
-    def hybrid_search(self, query: str, n_results: int = 5, filter_dict: dict | None = None) -> list[dict]:
-        """Semantic search reranked with a naive keyword-overlap score.
-
-        NOTE: replaced with a real cross-encoder reranker in the RAG-quality pass.
-        """
-        semantic_results = self.search(query, n_results=n_results * 2, filter_dict=filter_dict)
-
-        query_terms = set(query.lower().split())
-
-        for result in semantic_results:
-            text_terms = set(result["text"].lower().split())
-            keyword_overlap = len(query_terms & text_terms) / len(query_terms) if query_terms else 0
-
-            result["hybrid_score"] = 0.7 * result["relevance_score"] + 0.3 * keyword_overlap
-
-        semantic_results.sort(key=lambda x: x["hybrid_score"], reverse=True)
-
-        return semantic_results[:n_results]
-
     def get_stats(self, filter_dict: dict | None = None) -> dict:
         if filter_dict:
             sample = self.collection.get(where=filter_dict, limit=10_000)

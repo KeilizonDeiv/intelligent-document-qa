@@ -4,6 +4,8 @@ import logging
 
 import anthropic
 
+from app.services.query_rewriter import QueryRewriter
+from app.services.reranker import Reranker
 from app.services.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -15,9 +17,15 @@ class RAGEngine:
         vector_store: VectorStore,
         api_key: str | None = None,
         model: str = "claude-sonnet-5",
+        reranker: Reranker | None = None,
+        query_rewriter: QueryRewriter | None = None,
+        rerank_candidate_multiplier: int = 3,
     ):
         self.vector_store = vector_store
         self.model = model
+        self.reranker = reranker
+        self.query_rewriter = query_rewriter
+        self.rerank_candidate_multiplier = rerank_candidate_multiplier
 
         self.api_key = api_key
         if self.api_key:
@@ -28,19 +36,37 @@ class RAGEngine:
             self.has_api = False
             logger.warning("No Anthropic API key configured - running in demo mode")
 
-        self.conversation_history: list[dict] = []
+        # Keyed by session_id so conversation history and retrieval scoping
+        # stay consistent with each other (see VectorStore's session_id
+        # metadata filtering).
+        self.conversation_history: dict[str, list[dict]] = {}
 
     def query(
         self,
+        session_id: str,
         question: str,
         n_results: int = 5,
-        use_hybrid: bool = True,
+        use_reranking: bool = True,
         conversation_context: bool = True,
     ) -> dict:
-        if use_hybrid:
-            relevant_chunks = self.vector_store.hybrid_search(question, n_results=n_results)
+        history = self.conversation_history.setdefault(session_id, [])
+        filter_dict = {"session_id": session_id}
+
+        search_query = question
+        if conversation_context and history and self.query_rewriter:
+            search_query = self.query_rewriter.rewrite(question, history)
+            if search_query != question:
+                logger.info("Rewrote follow-up question for retrieval: %r -> %r", question, search_query)
+
+        if use_reranking and self.reranker:
+            candidates = self.vector_store.search(
+                search_query,
+                n_results=n_results * self.rerank_candidate_multiplier,
+                filter_dict=filter_dict,
+            )
+            relevant_chunks = self.reranker.rerank(search_query, candidates, top_n=n_results)
         else:
-            relevant_chunks = self.vector_store.search(question, n_results=n_results)
+            relevant_chunks = self.vector_store.search(search_query, n_results=n_results, filter_dict=filter_dict)
 
         if not relevant_chunks:
             return {
@@ -54,14 +80,14 @@ class RAGEngine:
         context = self._build_context(relevant_chunks)
 
         if self.has_api:
-            answer = self._generate_with_claude(question, context, conversation_context)
+            answer = self._generate_with_claude(question, context, history if conversation_context else [])
             model = self.model
         else:
             answer = self._generate_demo_answer(question, relevant_chunks)
             model = "demo"
 
         if conversation_context:
-            self.conversation_history.append(
+            history.append(
                 {
                     "question": question,
                     "answer": answer,
@@ -89,7 +115,7 @@ class RAGEngine:
 
         return "\n".join(context_parts)
 
-    def _generate_with_claude(self, question: str, context: str, use_history: bool) -> str:
+    def _generate_with_claude(self, question: str, context: str, history: list[dict]) -> str:
         system_prompt = """You are a helpful AI assistant that answers questions based on provided documents.
 
 INSTRUCTIONS:
@@ -108,10 +134,9 @@ Question: {question}
 Please answer the question based on the context above. Cite your sources."""
 
         messages = []
-        if use_history and self.conversation_history:
-            for exchange in self.conversation_history[-3:]:
-                messages.append({"role": "user", "content": exchange["question"]})
-                messages.append({"role": "assistant", "content": exchange["answer"]})
+        for exchange in history[-3:]:
+            messages.append({"role": "user", "content": exchange["question"]})
+            messages.append({"role": "assistant", "content": exchange["answer"]})
 
         messages.append({"role": "user", "content": user_message})
 
@@ -154,26 +179,30 @@ Please answer the question based on the context above. Cite your sources."""
         sources = []
 
         for chunk in chunks:
-            sources.append(
-                {
-                    "source": chunk["metadata"]["source"],
-                    "relevance": round(chunk.get("relevance_score", 0), 3),
-                    "chunk_id": chunk["id"],
-                    "preview": chunk["text"][:150] + "..." if len(chunk["text"]) > 150 else chunk["text"],
-                }
-            )
+            source = {
+                "source": chunk["metadata"]["source"],
+                "relevance": round(chunk.get("relevance_score", 0), 3),
+                "chunk_id": chunk["id"],
+                "preview": chunk["text"][:150] + "..." if len(chunk["text"]) > 150 else chunk["text"],
+            }
+            if "rerank_score" in chunk:
+                source["rerank_score"] = round(chunk["rerank_score"], 3)
+            sources.append(source)
 
         return sources
 
-    def clear_history(self) -> None:
-        self.conversation_history = []
+    def clear_history(self, session_id: str) -> None:
+        self.conversation_history.pop(session_id, None)
 
-    def get_conversation_history(self) -> list[dict]:
+    def get_conversation_history(self, session_id: str) -> list[dict]:
         return [
             {
                 "question": exchange["question"],
                 "answer": exchange["answer"],
                 "sources": list(set(exchange["sources"])),
             }
-            for exchange in self.conversation_history
+            for exchange in self.conversation_history.get(session_id, [])
         ]
+
+    def history_length(self, session_id: str) -> int:
+        return len(self.conversation_history.get(session_id, []))

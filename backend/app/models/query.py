@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 class QueryRequest(BaseModel):
     question: str
     n_results: int = Field(default=5, ge=1, le=20)
-    use_hybrid: bool = True
+    use_reranking: bool = True
     use_context: bool = True
 
 
@@ -13,6 +13,7 @@ class SourceCitation(BaseModel):
     relevance: float
     chunk_id: str
     preview: str
+    rerank_score: float | None = None
 
 
 class QueryResponse(BaseModel):
