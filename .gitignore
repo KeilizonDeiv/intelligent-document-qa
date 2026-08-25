@@ -42,6 +42,6 @@ vector_db/*
 *.log
 *.db
 
-# Model cache
+# Model cache (root-level only; don't shadow nested app/models packages)
 .cache/
-models/
+/models/
