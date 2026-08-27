@@ -1,7 +1,22 @@
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
+
+
+def parse_sse(response_text: str) -> list[dict]:
+    """Parse a `data: {...}\\n\\n`-delimited SSE body into a list of event dicts."""
+    events = []
+    for block in response_text.split("\n\n"):
+        block = block.strip()
+        if not block:
+            continue
+        for line in block.splitlines():
+            if line.startswith("data:"):
+                events.append(json.loads(line[len("data:") :].strip()))
+    return events
 
 
 @pytest.fixture
