@@ -1,21 +1,38 @@
+import json
+from collections.abc import AsyncIterator
+
 from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 
 from app.api.deps import get_rag_engine, get_session_id, get_vector_store
 from app.core.exceptions import InvalidRequestError, NoDocumentsError
-from app.models.query import QueryRequest, QueryResponse
+from app.models.query import QueryRequest
 from app.services.rag_engine import RAGEngine
 from app.services.vector_store import VectorStore
 
 router = APIRouter(tags=["query"])
 
 
-@router.post("/api/query", response_model=QueryResponse)
+def _format_sse(event: dict) -> str:
+    return f"data: {json.dumps(event)}\n\n"
+
+
+async def _event_stream(rag_engine: RAGEngine, **kwargs) -> AsyncIterator[str]:
+    async for event in rag_engine.stream_query(**kwargs):
+        yield _format_sse(event)
+
+
+@router.post("/api/query")
 async def query(
     payload: QueryRequest,
     session_id: str = Depends(get_session_id),
     vector_store: VectorStore = Depends(get_vector_store),
     rag_engine: RAGEngine = Depends(get_rag_engine),
-):
+) -> StreamingResponse:
+    """Answer a question over the session's documents as a stream of
+    Server-Sent Events: one `sources` event, then one or more `token`
+    events, then a final `done` event (see app.models.query for the event
+    shapes)."""
     question = payload.question.strip()
     if not question:
         raise InvalidRequestError("Question cannot be empty")
@@ -24,15 +41,18 @@ async def query(
     if stats["total_chunks"] == 0:
         raise NoDocumentsError("No documents uploaded yet. Please upload documents first.")
 
-    result = rag_engine.query(
-        session_id=session_id,
-        question=question,
-        n_results=payload.n_results,
-        use_reranking=payload.use_reranking,
-        conversation_context=payload.use_context,
+    return StreamingResponse(
+        _event_stream(
+            rag_engine,
+            session_id=session_id,
+            question=question,
+            n_results=payload.n_results,
+            use_reranking=payload.use_reranking,
+            conversation_context=payload.use_context,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
-
-    return result
 
 
 @router.get("/api/sample-questions", response_model=list[str])
