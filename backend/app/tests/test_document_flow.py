@@ -1,5 +1,7 @@
 import io
 
+from app.tests.conftest import parse_sse
+
 
 def _upload_sample(client, name="sample.txt", text=None):
     text = text or (
@@ -26,10 +28,16 @@ def test_upload_query_history_delete_flow(client):
 
     query_resp = client.post("/api/query", json={"question": "What is machine learning?"})
     assert query_resp.status_code == 200
-    result = query_resp.json()
-    assert result["retrieved_chunks"] >= 1
-    assert result["model"] == "demo"
-    assert len(result["sources"]) >= 1
+    assert query_resp.headers["content-type"].startswith("text/event-stream")
+
+    events = parse_sse(query_resp.text)
+    assert [e["type"] for e in events] == ["sources", "token", "done"]
+
+    sources_event, token_event, done_event = events
+    assert sources_event["retrieved_chunks"] >= 1
+    assert len(sources_event["sources"]) >= 1
+    assert token_event["text"]
+    assert done_event["model"] == "demo"
 
     history_resp = client.get("/api/history")
     assert history_resp.status_code == 200
