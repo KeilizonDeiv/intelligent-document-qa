@@ -99,8 +99,9 @@ class DocumentProcessor:
         for i, para in enumerate(doc.paragraphs, 1):
             para_text = para.text
             text += para_text + "\n"
-            if para_text.strip():
-                pages_metadata.append({"paragraph": i, "length": len(para_text)})
+            # Every paragraph gets an entry (even blank ones) so _create_chunks
+            # can reconstruct raw-text offsets purely from cumulative lengths.
+            pages_metadata.append({"paragraph": i, "length": len(para_text)})
 
         return text, pages_metadata
 
@@ -113,6 +114,43 @@ class DocumentProcessor:
 
         return text, pages_metadata
 
+    def _segment_by_metadata(self, text: str, pages_metadata: list[dict]) -> list[tuple[str | None, int, str]]:
+        """Split raw text into (label_key, label_value, raw_segment_text) triples.
+
+        pages_metadata entries are produced by _process_pdf ("page", joined
+        with "\\n\\n") or _process_docx ("paragraph", joined with "\\n"). Both
+        record each segment's pre-clean length, so the original separator
+        lengths let us slice the exact raw segment back out without needing
+        to change how text is built upstream.
+        """
+        if not pages_metadata:
+            return [(None, 0, text)]
+
+        first = pages_metadata[0]
+        if "page" in first:
+            label_key, sep_len = "page", 2
+        elif "paragraph" in first:
+            label_key, sep_len = "paragraph", 1
+        else:
+            return [(None, 0, text)]
+
+        segments = []
+        cursor = 0
+        for meta in pages_metadata:
+            length = meta.get("length", 0)
+            segments.append((label_key, meta[label_key], text[cursor : cursor + length]))
+            cursor += length + sep_len
+
+        return segments
+
+    def _label_for_position(self, boundaries: list[tuple[int, int]], pos: int) -> int | None:
+        label = None
+        for offset, value in boundaries:
+            if offset > pos:
+                break
+            label = value
+        return label
+
     def _create_chunks(
         self,
         text: str,
@@ -120,7 +158,23 @@ class DocumentProcessor:
         pages_metadata: list[dict],
         session_id: str | None = None,
     ) -> list[DocumentChunk]:
-        text = self._clean_text(text)
+        segments = self._segment_by_metadata(text, pages_metadata)
+
+        label_key = None
+        cleaned_segments = []
+        boundaries: list[tuple[int, int]] = []
+        offset = 0
+
+        for key, value, raw_segment in segments:
+            cleaned = self._clean_text(raw_segment)
+            if not cleaned:
+                continue
+            label_key = label_key or key
+            cleaned_segments.append(cleaned)
+            boundaries.append((offset, value))
+            offset += len(cleaned) + 2
+
+        text = "\n\n".join(cleaned_segments)
 
         chunks = []
         start = 0
@@ -151,6 +205,10 @@ class DocumentProcessor:
                     "end_pos": end,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
+                if label_key:
+                    label_value = self._label_for_position(boundaries, start)
+                    if label_value is not None:
+                        metadata[label_key] = label_value
                 if session_id:
                     metadata["session_id"] = session_id
 
