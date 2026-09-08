@@ -16,6 +16,8 @@ class SourceCitation(BaseModel):
     chunk_id: str
     preview: str
     rerank_score: float | None = None
+    page: int | None = None
+    paragraph: int | None = None
 
 
 class SourcesEvent(BaseModel):
