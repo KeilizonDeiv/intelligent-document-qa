@@ -151,12 +151,20 @@ class RAGEngine:
 
         for i, chunk in enumerate(chunks, 1):
             source = chunk["metadata"]["source"]
+            location = self._format_location(chunk["metadata"])
             text = chunk["text"]
             score = chunk.get("relevance_score", 0)
 
-            context_parts.append(f"[Source {i}: {source} (Relevance: {score:.2f})]\n{text}\n")
+            context_parts.append(f"[Source {i}: {source}{location} (Relevance: {score:.2f})]\n{text}\n")
 
         return "\n".join(context_parts)
+
+    def _format_location(self, metadata: dict) -> str:
+        if "page" in metadata:
+            return f", page {metadata['page']}"
+        if "paragraph" in metadata:
+            return f", paragraph {metadata['paragraph']}"
+        return ""
 
     async def _stream_from_claude(self, question: str, context: str, history: list[dict]) -> AsyncIterator[str]:
         user_message = f"""Context from documents:
@@ -191,10 +199,11 @@ Please answer the question based on the context above. Cite your sources."""
 
         for i, chunk in enumerate(chunks[:3], 1):
             source = chunk["metadata"]["source"]
+            location = self._format_location(chunk["metadata"])
             text = chunk["text"][:200]
             score = chunk.get("relevance_score", 0)
 
-            answer_parts.append(f"\n[Source {i}: {source}] (Relevance: {score:.2f})")
+            answer_parts.append(f"\n[Source {i}: {source}{location}] (Relevance: {score:.2f})")
             answer_parts.append(f"{text}...\n")
 
         answer_parts.append(
@@ -207,14 +216,19 @@ Please answer the question based on the context above. Cite your sources."""
         sources = []
 
         for chunk in chunks:
+            metadata = chunk["metadata"]
             source = {
-                "source": chunk["metadata"]["source"],
+                "source": metadata["source"],
                 "relevance": round(chunk.get("relevance_score", 0), 3),
                 "chunk_id": chunk["id"],
                 "preview": chunk["text"][:150] + "..." if len(chunk["text"]) > 150 else chunk["text"],
             }
             if "rerank_score" in chunk:
                 source["rerank_score"] = round(chunk["rerank_score"], 3)
+            if "page" in metadata:
+                source["page"] = metadata["page"]
+            if "paragraph" in metadata:
+                source["paragraph"] = metadata["paragraph"]
             sources.append(source)
 
         return sources
