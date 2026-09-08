@@ -88,6 +88,55 @@ def test_process_file_source_name_override(tmp_path, processor):
     assert all(c.metadata["session_id"] == "abc" for c in chunks)
 
 
+def test_create_chunks_tags_page_number_from_pdf_style_metadata(processor):
+    page1 = "A" * 300
+    page2 = "B" * 300
+    text = f"{page1}\n\n{page2}\n\n"
+    pages_metadata = [
+        {"page": 1, "length": len(page1)},
+        {"page": 2, "length": len(page2)},
+    ]
+
+    chunks = processor._create_chunks(text, "doc.pdf", pages_metadata)
+
+    assert len(chunks) >= 2
+    assert chunks[0].metadata["page"] == 1
+    assert {c.metadata["page"] for c in chunks} == {1, 2}
+
+
+def test_create_chunks_tags_paragraph_number_from_docx_style_metadata(processor):
+    para1 = "C" * 300
+    para2 = "D" * 300
+    text = f"{para1}\n{para2}\n"
+    pages_metadata = [
+        {"paragraph": 1, "length": len(para1)},
+        {"paragraph": 2, "length": len(para2)},
+    ]
+
+    chunks = processor._create_chunks(text, "doc.docx", pages_metadata)
+
+    assert len(chunks) >= 2
+    assert chunks[0].metadata["paragraph"] == 1
+    assert {c.metadata["paragraph"] for c in chunks} == {1, 2}
+
+
+def test_create_chunks_skips_blank_docx_paragraphs_without_breaking_offsets(processor):
+    para1 = "E" * 300
+    blank = ""
+    para2 = "F" * 300
+    text = f"{para1}\n{blank}\n{para2}\n"
+    pages_metadata = [
+        {"paragraph": 1, "length": len(para1)},
+        {"paragraph": 2, "length": len(blank)},
+        {"paragraph": 3, "length": len(para2)},
+    ]
+
+    chunks = processor._create_chunks(text, "doc.docx", pages_metadata)
+
+    assert chunks[0].metadata["paragraph"] == 1
+    assert {c.metadata["paragraph"] for c in chunks} == {1, 3}
+
+
 def test_chunk_overlap_shares_trailing_text(processor):
     # Each token is unique across the whole text, so any word shared between
     # consecutive chunks must have come from the overlap region.
